@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
+<title>xShell Lite</title>
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Sidebar: saved sessions -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <span>会话</span>
+        <div class="new-menu-wrap">
+          <button id="btn-new-menu" class="icon-btn" title="新建 (Ctrl+N)">＋</button>
+          <div id="new-menu" class="new-menu hidden">
+            <button type="button" id="menu-new-session">会话</button>
+            <button type="button" id="menu-new-folder">文件夹</button>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-search">
+        <input type="text" id="search-input" placeholder="搜索会话名称 / IP" />
+      </div>
+      <ul id="session-list"></ul>
+    </aside>
+
+    <!-- Main area -->
+    <main id="main">
+      <div id="tab-bar"></div>
+      <div id="terminal-area">
+        <div id="empty-state">
+          <p>没有打开的连接</p>
+          <button id="btn-empty-new-session">新建会话</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Session editor modal -->
+  <div id="modal-overlay" class="hidden">
+    <div class="modal">
+      <h2 id="modal-title">新建会话</h2>
+      <form id="session-form">
+        <input type="hidden" id="f-id" />
+
+        <label>会话名称
+          <input type="text" id="f-name" placeholder="例如：我的服务器" />
+        </label>
+
+        <label>所属文件夹
+          <select id="f-folder">
+            <option value="">无（不分组）</option>
+          </select>
+        </label>
+
+        <div class="row">
+          <label class="grow">主机 / IP
+            <input type="text" id="f-host" placeholder="例如：192.168.1.10" required />
+          </label>
+          <label class="port">端口
+            <input type="number" id="f-port" value="22" min="1" max="65535" required />
+          </label>
+        </div>
+
+        <label>用户名
+          <input type="text" id="f-username" placeholder="root" required />
+        </label>
+
+        <div class="auth-tabs">
+          <button type="button" class="auth-tab active" data-auth="password">密码</button>
+          <button type="button" class="auth-tab" data-auth="key">私钥</button>
+        </div>
+
+        <div id="auth-password" class="auth-panel">
+          <label>密码
+            <input type="password" id="f-password" placeholder="留空则每次连接时询问" />
+          </label>
+        </div>
+
+        <div id="auth-key" class="auth-panel hidden">
+          <label>私钥文件
+            <div class="row">
+              <input type="text" id="f-keypath" readonly placeholder="选择私钥文件..." class="grow" />
+              <button type="button" id="btn-browse-key">浏览...</button>
+            </div>
+          </label>
+          <label>密钥口令 (如有)
+            <input type="password" id="f-passphrase" />
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" id="btn-delete-session" class="danger hidden">删除</button>
+          <div class="spacer"></div>
+          <button type="button" id="btn-cancel">取消</button>
+          <button type="submit" id="btn-save">保存并连接</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- New folder modal -->
+  <div id="folder-modal-overlay" class="hidden">
+    <div class="modal modal-sm">
+      <h2>新建文件夹</h2>
+      <form id="folder-form">
+        <label>文件夹名称
+          <input type="text" id="f-folder-name" placeholder="例如：生产环境" required />
+        </label>
+        <div class="modal-actions">
+          <div class="spacer"></div>
+          <button type="button" id="btn-folder-cancel">取消</button>
+          <button type="submit">创建</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Session right-click context menu -->
+  <div id="session-context-menu" class="context-menu hidden">
+    <button type="button" data-action="open">打开</button>
+    <button type="button" data-action="rename">重命名</button>
+    <button type="button" data-action="delete">删除</button>
+    <div class="context-menu-sep"></div>
+    <button type="button" data-action="shortcut">创建桌面快捷方式</button>
+  </div>
+
+  <!-- Right-click on empty sidebar space: 新建 > 会话 / 文件夹 -->
+  <div id="sidebar-context-menu" class="context-menu hidden">
+    <div class="context-menu-parent" id="ctx-new-parent">
+      <span>新建</span>
+      <span class="submenu-caret">▸</span>
+    </div>
+  </div>
+  <div id="ctx-new-submenu" class="context-menu submenu hidden">
+    <button type="button" id="ctx-new-session">会话</button>
+    <button type="button" id="ctx-new-folder">文件夹</button>
+  </div>
+
+  <!-- Folder right-click context menu -->
+  <div id="folder-context-menu" class="context-menu hidden">
+    <button type="button" data-action="rename">重命名</button>
+    <button type="button" data-action="delete">删除</button>
+  </div>
+
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

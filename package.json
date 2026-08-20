@@ -1,0 +1,64 @@
+{
+  "name": "xshell-lite",
+  "version": "1.0.0",
+  "description": "仿照 Xshell 制作的跨平台 SSH 终端客户端 (Electron + xterm.js + ssh2)",
+  "main": "electron/main.js",
+  "author": "",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "build": "electron-builder -mwl"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "ssh2": "^1.17.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "electron": "^39.8.10",
+    "electron-builder": "^26.15.3"
+  },
+  "overrides": {
+    "@noble/hashes": "^1.7.1"
+  },
+  "build": {
+    "appId": "com.example.xshelllite",
+    "productName": "xShell Lite",
+    "npmRebuild": false,
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    }
+  }
+}
