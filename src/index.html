@@ -29,11 +29,42 @@
 
     <!-- Main area -->
     <main id="main">
-      <div id="tab-bar"></div>
-      <div id="terminal-area">
-        <div id="empty-state">
-          <p>没有打开的连接</p>
-          <button id="btn-empty-new-session">新建会话</button>
+      <div id="tab-bar">
+        <div id="tab-bar-tabs"></div>
+        <div id="tab-bar-actions">
+          <button id="btn-toggle-sftp" class="icon-btn" title="文件传输 (SFTP)" disabled>⇅</button>
+        </div>
+      </div>
+      <div id="workspace">
+        <div id="terminal-area">
+          <div id="empty-state">
+            <p>没有打开的连接</p>
+            <button id="btn-empty-new-session">新建会话</button>
+          </div>
+        </div>
+
+        <!-- SFTP file browser panel, bound to whichever tab is active -->
+        <div id="sftp-panel" class="hidden">
+          <div class="sftp-toolbar">
+            <button type="button" id="sftp-up" title="上一级">↑</button>
+            <input type="text" id="sftp-path" placeholder="/" />
+            <button type="button" id="sftp-go" title="前往">Go</button>
+            <button type="button" id="sftp-refresh" title="刷新">⟳</button>
+            <button type="button" id="sftp-mkdir" title="新建文件夹">📁+</button>
+            <button type="button" id="sftp-upload" title="上传文件">⬆ 上传</button>
+            <button type="button" id="sftp-close" title="关闭面板">×</button>
+          </div>
+          <div id="sftp-body">
+            <div id="sftp-message" class="sftp-message hidden"></div>
+            <table id="sftp-table">
+              <thead>
+                <tr><th class="col-name">名称</th><th class="col-size">大小</th><th class="col-mtime">修改时间</th></tr>
+              </thead>
+              <tbody id="sftp-list"></tbody>
+            </table>
+            <div id="sftp-dropzone" class="hidden">松开鼠标上传到当前目录</div>
+          </div>
+          <div id="sftp-transfers"></div>
         </div>
       </div>
     </main>
@@ -142,6 +173,13 @@
 
   <!-- Folder right-click context menu -->
   <div id="folder-context-menu" class="context-menu hidden">
+    <button type="button" data-action="rename">重命名</button>
+    <button type="button" data-action="delete">删除</button>
+  </div>
+
+  <!-- SFTP file/folder right-click context menu -->
+  <div id="sftp-context-menu" class="context-menu hidden">
+    <button type="button" data-action="download">下载</button>
     <button type="button" data-action="rename">重命名</button>
     <button type="button" data-action="delete">删除</button>
   </div>

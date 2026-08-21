@@ -19,13 +19,17 @@ let activeTabId = null;
 const sessionStatus = new Map();
 const collapsedGroups = new Set(); // group names currently collapsed in the sidebar
 
+let sftpPanelOpen = false;
+let sftpContextItem = null; // { name, path, isDir } for the SFTP row context menu
+const sftpTransferEls = new Map(); // transferId -> DOM element in the transfers list
+
 // ---------------------------------------------------------------------------
 // DOM references
 // ---------------------------------------------------------------------------
 
 const el = {
   sessionList: document.getElementById('session-list'),
-  tabBar: document.getElementById('tab-bar'),
+  tabBar: document.getElementById('tab-bar-tabs'),
   terminalArea: document.getElementById('terminal-area'),
   emptyState: document.getElementById('empty-state'),
   modalOverlay: document.getElementById('modal-overlay'),
@@ -59,6 +63,22 @@ const el = {
   ctxNewSession: document.getElementById('ctx-new-session'),
   ctxNewFolder: document.getElementById('ctx-new-folder'),
   folderContextMenu: document.getElementById('folder-context-menu'),
+  btnToggleSftp: document.getElementById('btn-toggle-sftp'),
+  sftpPanel: document.getElementById('sftp-panel'),
+  sftpPath: document.getElementById('sftp-path'),
+  sftpUp: document.getElementById('sftp-up'),
+  sftpGo: document.getElementById('sftp-go'),
+  sftpRefresh: document.getElementById('sftp-refresh'),
+  sftpMkdir: document.getElementById('sftp-mkdir'),
+  sftpUpload: document.getElementById('sftp-upload'),
+  sftpClose: document.getElementById('sftp-close'),
+  sftpBody: document.getElementById('sftp-body'),
+  sftpMessage: document.getElementById('sftp-message'),
+  sftpTable: document.getElementById('sftp-table'),
+  sftpList: document.getElementById('sftp-list'),
+  sftpDropzone: document.getElementById('sftp-dropzone'),
+  sftpTransfers: document.getElementById('sftp-transfers'),
+  sftpContextMenu: document.getElementById('sftp-context-menu'),
 };
 
 // ---------------------------------------------------------------------------
@@ -806,7 +826,7 @@ function createTabShell(id, title) {
   term.loadAddon(fitAddon);
   term.open(paneEl);
 
-  const tab = { id, session: null, term, fitAddon, paneEl, tabEl, status: 'connecting', connected: false };
+  const tab = { id, session: null, term, fitAddon, paneEl, tabEl, status: 'connecting', connected: false, sftpPath: null };
 
   term.onData((data) => {
     if (tab.connected) window.api.ssh.write(tab.id, data);
@@ -845,6 +865,8 @@ function rekeyTab(oldId, newId, session) {
   };
 
   fitActiveTab();
+  updateSftpToggleAvailability();
+  if (sftpPanelOpen && activeTabId === newId) loadSftpForActiveTab();
 }
 
 function setTabStatus(id, status) {
@@ -863,6 +885,8 @@ function switchToTab(id) {
     t.paneEl.classList.toggle('active', isActive);
   }
   fitActiveTab();
+  updateSftpToggleAvailability();
+  if (sftpPanelOpen) loadSftpForActiveTab();
 }
 
 function closeTab(id) {
@@ -883,6 +907,7 @@ function closeTab(id) {
     else {
       activeTabId = null;
       el.emptyState.style.display = 'flex';
+      updateSftpToggleAvailability();
     }
   }
 }
@@ -919,12 +944,375 @@ window.api.ssh.onClosed(({ id }) => {
   tab.connected = false;
   setTabStatus(id, 'error');
   tab.term.writeln('\r\n\x1b[90m[连接已断开]\x1b[0m');
+  if (id === activeTabId) updateSftpToggleAvailability();
 });
 
 window.api.ssh.onError(({ id, error }) => {
   const tab = tabs.get(id);
   if (!tab) return;
   tab.term.writeln(`\r\n\x1b[31m[错误] ${error}\x1b[0m`);
+});
+
+// ---------------------------------------------------------------------------
+// SFTP file browser panel — bound to whichever tab is active. One SFTP
+// channel per connection is opened lazily on the main-process side the first
+// time this panel is used for that tab.
+// ---------------------------------------------------------------------------
+
+function remoteJoin(dir, name) {
+  if (!dir || dir === '/') return `/${name}`;
+  return `${dir.replace(/\/+$/, '')}/${name}`;
+}
+
+function remoteParent(dir) {
+  if (!dir || dir === '/') return '/';
+  const trimmed = dir.replace(/\/+$/, '');
+  const idx = trimmed.lastIndexOf('/');
+  return idx <= 0 ? '/' : trimmed.slice(0, idx);
+}
+
+function formatBytes(n) {
+  if (n == null) return '';
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let i = -1;
+  do { v /= 1024; i += 1; } while (v >= 1024 && i < units.length - 1);
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+function formatDateTime(ms) {
+  const d = new Date(ms);
+  const pad = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function updateSftpToggleAvailability() {
+  const tab = activeTabId ? tabs.get(activeTabId) : null;
+  const available = !!(tab && tab.connected);
+  el.btnToggleSftp.disabled = !available;
+  el.btnToggleSftp.classList.toggle('active', sftpPanelOpen);
+  if (!available && sftpPanelOpen) closeSftpPanel();
+}
+
+function toggleSftpPanel() {
+  if (el.btnToggleSftp.disabled) return;
+  if (sftpPanelOpen) closeSftpPanel();
+  else openSftpPanel();
+}
+
+function openSftpPanel() {
+  sftpPanelOpen = true;
+  el.sftpPanel.classList.remove('hidden');
+  el.btnToggleSftp.classList.add('active');
+  loadSftpForActiveTab();
+  fitActiveTab();
+}
+
+function closeSftpPanel() {
+  sftpPanelOpen = false;
+  el.sftpPanel.classList.add('hidden');
+  el.btnToggleSftp.classList.remove('active');
+  fitActiveTab();
+}
+
+el.btnToggleSftp.addEventListener('click', toggleSftpPanel);
+el.sftpClose.addEventListener('click', closeSftpPanel);
+
+function showSftpMessage(text, isError) {
+  el.sftpMessage.textContent = text;
+  el.sftpMessage.classList.remove('hidden');
+  el.sftpMessage.classList.toggle('error', !!isError);
+  el.sftpTable.classList.add('hidden');
+}
+
+function hideSftpMessage() {
+  el.sftpMessage.classList.add('hidden');
+  el.sftpTable.classList.remove('hidden');
+}
+
+async function loadSftpForActiveTab() {
+  const tab = tabs.get(activeTabId);
+  if (!tab || !tab.connected) return;
+  if (tab.sftpPath == null) {
+    showSftpMessage('加载中…');
+    const res = await window.api.sftp.realpath(tab.id, '.');
+    if (tab.id !== activeTabId) return; // switched away while awaiting
+    tab.sftpPath = res.ok ? res.path : '/';
+  }
+  await loadSftpDir(activeTabId, tab.sftpPath);
+}
+
+async function loadSftpDir(connId, dirPath) {
+  const tab = tabs.get(connId);
+  if (!tab) return;
+  showSftpMessage('加载中…');
+  const res = await window.api.sftp.list(connId, dirPath);
+  if (connId !== activeTabId) return; // user switched tabs while this was in flight
+  if (!res.ok) {
+    showSftpMessage(`加载失败：${res.error}`, true);
+    return;
+  }
+  tab.sftpPath = res.path;
+  el.sftpPath.value = res.path;
+  hideSftpMessage();
+  renderSftpList(connId, res.path, res.items);
+}
+
+function renderSftpList(connId, dirPath, items) {
+  el.sftpList.innerHTML = '';
+  if (items.length === 0) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 3;
+    td.style.cssText = 'color:var(--text-dim); text-align:center; padding:16px;';
+    td.textContent = '空文件夹';
+    tr.appendChild(td);
+    el.sftpList.appendChild(tr);
+    return;
+  }
+
+  for (const item of items) {
+    const remotePath = remoteJoin(dirPath, item.name);
+    const tr = document.createElement('tr');
+    tr.dataset.name = item.name;
+    tr.innerHTML = `
+      <td class="col-name"><span class="file-icon">${item.isDir ? '📁' : '📄'}</span><span class="name-text"></span></td>
+      <td class="col-size"></td>
+      <td class="col-mtime"></td>
+    `;
+    tr.querySelector('.name-text').textContent = item.name;
+    tr.querySelector('.col-size').textContent = item.isDir ? '' : formatBytes(item.size);
+    tr.querySelector('.col-mtime').textContent = item.mtime ? formatDateTime(item.mtime) : '';
+
+    tr.addEventListener('dblclick', () => {
+      if (item.isDir) loadSftpDir(connId, remotePath);
+    });
+    tr.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openSftpContextMenu({ name: item.name, path: remotePath, isDir: item.isDir }, e.clientX, e.clientY);
+    });
+
+    el.sftpList.appendChild(tr);
+  }
+}
+
+el.sftpUp.addEventListener('click', () => {
+  const tab = tabs.get(activeTabId);
+  if (tab) loadSftpDir(activeTabId, remoteParent(tab.sftpPath));
+});
+
+function navigateToTypedSftpPath() {
+  const p = el.sftpPath.value.trim();
+  if (p) loadSftpDir(activeTabId, p);
+}
+el.sftpGo.addEventListener('click', navigateToTypedSftpPath);
+el.sftpPath.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') navigateToTypedSftpPath();
+});
+
+el.sftpRefresh.addEventListener('click', () => {
+  const tab = tabs.get(activeTabId);
+  if (tab) loadSftpDir(activeTabId, tab.sftpPath);
+});
+
+// ---- New folder (inline editable row, same pattern as session/folder rename) ----
+
+el.sftpMkdir.addEventListener('click', () => {
+  const tab = tabs.get(activeTabId);
+  if (tab) startSftpMkdirRow(tab);
+});
+
+function startSftpMkdirRow(tab) {
+  const tr = document.createElement('tr');
+  const nameTd = document.createElement('td');
+  nameTd.className = 'col-name';
+  nameTd.innerHTML = '<span class="file-icon">📁</span>';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rename-input';
+  input.placeholder = '新文件夹名称';
+  nameTd.appendChild(input);
+  tr.appendChild(nameTd);
+  tr.appendChild(document.createElement('td'));
+  tr.appendChild(document.createElement('td'));
+  el.sftpList.insertBefore(tr, el.sftpList.firstChild);
+  input.focus();
+
+  let done = false;
+  const finish = async (commit) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    if (commit && name) {
+      const res = await window.api.sftp.mkdir(activeTabId, remoteJoin(tab.sftpPath, name));
+      if (!res.ok) alert(`创建文件夹失败：${res.error}`);
+      loadSftpDir(activeTabId, tab.sftpPath);
+    } else {
+      tr.remove();
+    }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+// ---- Upload (toolbar button + drag-and-drop from the OS) ----
+
+el.sftpUpload.addEventListener('click', async () => {
+  const files = await window.api.dialog.selectUploadFiles();
+  if (files && files.length) await uploadFilesToCurrentDir(files);
+});
+
+async function uploadFilesToCurrentDir(localPaths) {
+  const tab = tabs.get(activeTabId);
+  if (!tab) return;
+  const connId = activeTabId;
+  const res = await window.api.sftp.upload(connId, localPaths, tab.sftpPath);
+  if (connId === activeTabId) loadSftpDir(connId, tab.sftpPath);
+  const failed = res.ok ? (res.results || []).filter((r) => !r.ok) : [];
+  if (!res.ok) alert(`上传失败：${res.error}`);
+  else if (failed.length) alert(`部分文件上传失败：\n${failed.map((f) => `${f.name}: ${f.error}`).join('\n')}`);
+}
+
+el.sftpBody.addEventListener('dragover', (e) => {
+  if (!sftpPanelOpen) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+  el.sftpDropzone.classList.remove('hidden');
+});
+el.sftpBody.addEventListener('dragleave', (e) => {
+  if (!el.sftpBody.contains(e.relatedTarget)) el.sftpDropzone.classList.add('hidden');
+});
+el.sftpBody.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  el.sftpDropzone.classList.add('hidden');
+  const files = [...e.dataTransfer.files].map((f) => f.path).filter(Boolean);
+  if (files.length) await uploadFilesToCurrentDir(files);
+});
+
+// ---- Row context menu: 下载 / 重命名 / 删除 ----
+
+function openSftpContextMenu(item, x, y) {
+  hideNewMenu();
+  closeSessionContextMenu();
+  closeSidebarContextMenu();
+  closeFolderContextMenu();
+  sftpContextItem = item;
+  const menu = el.sftpContextMenu;
+  menu.classList.remove('hidden');
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = `${Math.max(0, window.innerWidth - rect.width - 4)}px`;
+  if (rect.bottom > window.innerHeight) menu.style.top = `${Math.max(0, window.innerHeight - rect.height - 4)}px`;
+}
+
+function closeSftpContextMenu() {
+  sftpContextItem = null;
+  el.sftpContextMenu.classList.add('hidden');
+}
+
+document.addEventListener('click', () => closeSftpContextMenu());
+window.addEventListener('blur', () => closeSftpContextMenu());
+
+el.sftpContextMenu.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  e.stopPropagation();
+  const item = sftpContextItem;
+  closeSftpContextMenu();
+  if (!item) return;
+  const tab = tabs.get(activeTabId);
+  if (!tab) return;
+
+  switch (btn.dataset.action) {
+    case 'download': {
+      if (item.isDir) { alert('暂不支持下载整个文件夹，请下载里面的单个文件。'); break; }
+      const dir = await window.api.dialog.selectDownloadDir();
+      if (!dir) break;
+      const res = await window.api.sftp.download(activeTabId, [item], dir);
+      const failed = res.ok ? (res.results || []).filter((r) => !r.ok) : [];
+      if (!res.ok) alert(`下载失败：${res.error}`);
+      else if (failed.length) alert(`下载失败：${failed[0].error}`);
+      break;
+    }
+    case 'rename':
+      startRenameSftpItem(tab, item);
+      break;
+    case 'delete': {
+      const kind = item.isDir ? '文件夹' : '文件';
+      if (!confirm(`确定要删除${kind} "${item.name}" 吗？${item.isDir ? '（文件夹必须为空才能删除）' : ''}`)) break;
+      const res = await window.api.sftp.delete(activeTabId, item.path, item.isDir);
+      if (!res.ok) { alert(`删除失败：${res.error}`); break; }
+      loadSftpDir(activeTabId, tab.sftpPath);
+      break;
+    }
+  }
+});
+
+function startRenameSftpItem(tab, item) {
+  const tr = [...el.sftpList.querySelectorAll('tr')].find((r) => r.dataset.name === item.name);
+  const nameText = tr && tr.querySelector('.name-text');
+  if (!tr || !nameText) return;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rename-input';
+  input.value = item.name;
+  nameText.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = async (commit) => {
+    if (done) return;
+    done = true;
+    const newName = input.value.trim();
+    if (commit && newName && newName !== item.name) {
+      const newPath = remoteJoin(tab.sftpPath, newName);
+      const res = await window.api.sftp.rename(activeTabId, item.path, newPath);
+      if (!res.ok) alert(`重命名失败：${res.error}`);
+      loadSftpDir(activeTabId, tab.sftpPath);
+    } else {
+      input.replaceWith(nameText);
+    }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('dblclick', (e) => e.stopPropagation());
+}
+
+// ---- Transfer progress ----
+
+window.api.sftp.onProgress((payload) => {
+  const { transferId, name, direction, transferred, total, done, error } = payload;
+  let row = sftpTransferEls.get(transferId);
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'sftp-transfer';
+    row.innerHTML = `<div class="row"><span class="name"></span><span class="pct"></span></div><div class="bar"><div class="bar-fill"></div></div>`;
+    row.querySelector('.name').textContent = `${direction === 'upload' ? '⬆' : '⬇'} ${name}`;
+    el.sftpTransfers.appendChild(row);
+    sftpTransferEls.set(transferId, row);
+  }
+  const pct = total ? Math.min(100, Math.round((transferred / total) * 100)) : 0;
+  if (!done) {
+    row.querySelector('.bar-fill').style.width = `${pct}%`;
+    row.querySelector('.pct').textContent = `${pct}%`;
+  } else {
+    row.classList.add(error ? 'error' : 'done');
+    row.querySelector('.bar-fill').style.width = '100%';
+    row.querySelector('.pct').textContent = error ? '失败' : '完成';
+    sftpTransferEls.delete(transferId);
+    setTimeout(() => row.remove(), 4000);
+  }
 });
 
 // ---------------------------------------------------------------------------
